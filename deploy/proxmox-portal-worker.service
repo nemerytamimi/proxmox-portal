@@ -1,0 +1,26 @@
+[Unit]
+Description=Proxmox Portal (Terraform job worker)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/proxmox-portal
+EnvironmentFile=/var/lib/proxmox-portal/portal.env
+ExecStart=/usr/bin/npm run worker
+Restart=always
+RestartSec=5
+
+# On stop the worker finishes the job it is holding rather than abandoning a
+# half-applied guest. Give a long apply room to land before SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=900
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/proxmox-portal
+
+[Install]
+WantedBy=multi-user.target

@@ -27,9 +27,11 @@ export interface RunOptions {
 }
 
 /** Credentials and runner settings shared by every terraform invocation. */
-function terraformEnv(secrets: Record<string, string | undefined> = {}) {
-  const vars: Record<string, string> = {
-    ...(process.env as Record<string, string>),
+function terraformEnv(
+  secrets: Record<string, string | undefined> = {},
+): NodeJS.ProcessEnv {
+  const vars: NodeJS.ProcessEnv = {
+    ...process.env,
 
     // Non-interactive: no colour codes in the log, no prompts to hang on.
     TF_IN_AUTOMATION: "1",

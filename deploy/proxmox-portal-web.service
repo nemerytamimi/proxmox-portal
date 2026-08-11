@@ -1,0 +1,22 @@
+[Unit]
+Description=Proxmox Portal (web)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/proxmox-portal
+EnvironmentFile=/var/lib/proxmox-portal/portal.env
+ExecStart=/usr/bin/npm run start
+Restart=always
+RestartSec=5
+
+# The portal holds a cluster-wide Proxmox token; keep the blast radius small.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/proxmox-portal
+
+[Install]
+WantedBy=multi-user.target
