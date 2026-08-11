@@ -89,6 +89,18 @@ resource "proxmox_virtual_environment_container" "this" {
   lifecycle {
     # The template is only read at creation time; changing it would force a
     # rebuild that silently destroys the container's data.
-    ignore_changes = [operating_system[0].template_file_id]
+    #
+    # user_account is in the same category, and is the more dangerous of the
+    # two. Proxmox never returns the password or the injected keys, so a
+    # container brought into state with `terraform import` comes back without
+    # them. Terraform then sees the configured user_account as a brand new
+    # block and, because it is create-only, proposes replacing the container —
+    # destroying the disk to fix a value it simply cannot read. Credentials are
+    # applied at creation; changing them afterwards is a job for passwd, not an
+    # apply.
+    ignore_changes = [
+      operating_system[0].template_file_id,
+      initialization[0].user_account,
+    ]
   }
 }

@@ -238,6 +238,32 @@ export async function guestStatus(
 }
 
 /**
+ * The address a guest actually holds right now, which is not always the one
+ * that was asked for — on a DHCP node it is not knowable in advance at all.
+ *
+ * Containers report this over the API directly. VMs would need the guest agent,
+ * which stock cloud images do not ship, so they return null and the UI falls
+ * back to the requested value.
+ */
+export async function observedIpv4(
+  kind: "LXC" | "VM",
+  node: string,
+  vmid: number,
+): Promise<string | null> {
+  if (kind !== "LXC") return null;
+  try {
+    const ifaces = await call<Array<{ name: string; inet?: string }>>(
+      "GET",
+      `${base(kind, node, vmid)}/interfaces`,
+    );
+    const eth = ifaces.find((i) => i.name !== "lo" && i.inet);
+    return eth?.inet ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Power actions bypass Terraform on purpose: running vs stopped is not part of
  * the desired state the portal manages, and routing it through an apply would
  * make a one-second action take a minute.

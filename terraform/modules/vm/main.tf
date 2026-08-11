@@ -130,6 +130,10 @@ resource "proxmox_virtual_environment_vm" "this" {
   lifecycle {
     ignore_changes = [
       disk[0].import_from, # only meaningful at create time
+      # Cloud-init credentials cannot be read back from Proxmox, so a VM that
+      # enters state via `terraform import` would otherwise look like it needs
+      # replacing. See the same note in modules/lxc/main.tf.
+      initialization[0].user_account,
     ]
   }
 }

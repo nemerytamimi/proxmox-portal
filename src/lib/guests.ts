@@ -4,7 +4,7 @@ import { audit } from "./audit";
 import { prisma } from "./db";
 import { enqueue } from "./orders";
 import { willReaddress } from "./ipam";
-import { guestStatus, powerAction } from "./pve";
+import { guestStatus, observedIpv4, powerAction } from "./pve";
 import { checkQuota } from "./quota";
 import { unusableReason } from "./nodes";
 import { isBusy, type PowerAction } from "./types";
@@ -46,6 +46,19 @@ export async function liveStatus(guestId: string) {
   } catch {
     return null;
   }
+}
+
+/**
+ * The address the guest is actually reachable on. Matters most for DHCP nodes,
+ * where the requested value is literally the string "dhcp".
+ */
+export async function observedAddress(guestId: string): Promise<string | null> {
+  const guest = await prisma.guest.findUnique({
+    where: { id: guestId },
+    include: { node: true },
+  });
+  if (!guest || guest.status === "DESTROYED") return null;
+  return observedIpv4(guest.kind as "LXC" | "VM", guest.node.name, guest.vmid);
 }
 
 export async function doPowerAction(

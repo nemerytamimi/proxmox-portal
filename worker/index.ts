@@ -20,7 +20,13 @@ import { prisma } from "../src/lib/db";
 import { decryptSecret } from "../src/lib/crypto";
 import { paths } from "../src/lib/env";
 import { reallocateForNode, willReaddress } from "../src/lib/ipam";
-import { migrateGuest, waitForTask } from "../src/lib/pve";
+import {
+  guestStatus,
+  listClusterGuests,
+  migrateGuest,
+  powerAction,
+  waitForTask,
+} from "../src/lib/pve";
 import {
   ensureRuntimeDirs,
   writeWorkspace,
@@ -90,19 +96,41 @@ async function setGuest(
 }
 
 /**
- * Pull vmid/ip back out of the workspace after an apply. Terraform is the
- * authority here — on a DHCP node the address the guest actually got is not
- * something the portal could have predicted.
+ * Pull the VMID back out of the workspace after an apply — it is the one value
+ * Proxmox may have chosen for us.
+ *
+ * The address deliberately is not reconciled. `guest.ipv4Address` is a
+ * Terraform *input* ("10.98.3.140/24" or "dhcp"), while the module's
+ * ipv4_address output is a display value with the CIDR suffix stripped. Feeding
+ * that output back in turns the next apply's input into "10.98.3.140", which
+ * Proxmox rejects with "net0.ip: invalid format". Desired state stays desired
+ * state; the observed address comes from the PVE API instead.
  */
+/** Poll until a guest reaches the wanted power state, or give up. */
+async function waitForGuestState(
+  kind: "LXC" | "VM",
+  node: string,
+  vmid: number,
+  wanted: "running" | "stopped",
+  { timeoutMs = 180_000, intervalMs = 3_000 } = {},
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const status = await guestStatus(kind, node, vmid);
+    if (status?.status === wanted) return;
+    if (Date.now() > deadline) {
+      throw new Error(`guest ${vmid} did not become ${wanted} in time`);
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
 async function reconcileOutputs(guest: Guest): Promise<Partial<Guest>> {
   const outputs = await readOutputs(paths.workspace(guest.id));
   const patch: Partial<Guest> = {};
 
   const vmid = Number(outputs.vm_id);
   if (Number.isFinite(vmid) && vmid > 0) patch.vmid = vmid;
-
-  const ip = outputs.ipv4_address;
-  if (typeof ip === "string" && ip.length > 0) patch.ipv4Address = ip;
 
   return patch;
 }
@@ -286,7 +314,23 @@ async function runMigrate(
   }
 
   // --- container path -------------------------------------------------------
+  //
+  // A running container cannot simply be handed to PVE with `restart`: it would
+  // come back up on the target still configured for the source node's bridge.
+  // Where that bridge does not exist (vmbr1 lives only on vmi3482497) the start
+  // fails and the whole task reports "migration problems" even though the disk
+  // moved. So stop it first, move it cold, let Terraform apply the target
+  // node's network profile, and only then start it again.
+  const wasRunning =
+    (await guestStatus("LXC", fromNode.name, guest.vmid))?.status === "running";
+
   try {
+    if (wasRunning) {
+      await logLine(job.logPath, "stopping the container before an offline move");
+      await powerAction("LXC", fromNode.name, guest.vmid, "shutdown");
+      await waitForGuestState("LXC", fromNode.name, guest.vmid, "stopped");
+    }
+
     await logLine(
       job.logPath,
       `migrating container ${guest.vmid} from ${fromNode.name} to ${target.name} via the PVE API`,
@@ -296,23 +340,39 @@ async function runMigrate(
       fromNode.name,
       guest.vmid,
       target.name,
-      // `local` is a dir store on every node, so this is an offline move;
-      // restart lets PVE stop, copy and start it again without us doing it.
-      { restart: true },
     );
     await waitForTask(fromNode.name, upid);
     await logLine(job.logPath, "PVE migration task completed");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await logLine(job.logPath, `PVE migration failed: ${message}`);
-    // Nothing has been touched in Terraform state yet, so the guest is still
-    // consistent on its original node.
-    await setGuest(guest.id, {
-      status: "ERROR",
-      statusDetail: `migration failed: ${message}`,
-    });
-    await finish(job, "FAILED", { error: message });
-    return;
+    await logLine(job.logPath, `PVE migration reported a failure: ${message}`);
+
+    // A failed task does not mean nothing happened. PVE can move the disk and
+    // then fail to start the guest, which leaves it on the target node. Ask the
+    // cluster where the container actually is before deciding what to do —
+    // otherwise the database and Terraform state both end up pointing at a node
+    // that no longer holds it.
+    const actual = (await listClusterGuests()).find(
+      (g) => g.vmid === guest.vmid && g.type === "lxc",
+    );
+
+    if (actual?.node !== target.name) {
+      await logLine(
+        job.logPath,
+        `container is still on ${actual?.node ?? "an unknown node"}; nothing to reconcile`,
+      );
+      await setGuest(guest.id, {
+        status: "ERROR",
+        statusDetail: `migration failed: ${message}`,
+      });
+      await finish(job, "FAILED", { error: message });
+      return;
+    }
+
+    await logLine(
+      job.logPath,
+      `container did reach ${target.name} despite the task error; continuing to reconcile state`,
+    );
   }
 
   await setGuest(guest.id, moved);
@@ -355,7 +415,9 @@ async function runMigrate(
     return;
   }
 
-  // Now reconcile the network change the move implies.
+  // Now reconcile the network change the move implies. This is what puts the
+  // container onto the target node's bridge, so it has to happen before the
+  // container is allowed to start again.
   const result = await apply(opts);
   if (!result.ok) {
     await setGuest(guest.id, {
@@ -367,6 +429,26 @@ async function runMigrate(
       error: "post-migration apply failed",
     });
     return;
+  }
+
+  if (wasRunning) {
+    try {
+      await logLine(job.logPath, "starting the container on its new node");
+      await powerAction("LXC", target.name, guest.vmid, "start");
+      await waitForGuestState("LXC", target.name, guest.vmid, "running");
+    } catch (err) {
+      // The move itself succeeded, so this is not a failed migration — but the
+      // owner needs to know their container is sitting there stopped.
+      const message = err instanceof Error ? err.message : String(err);
+      await logLine(job.logPath, `could not start after migration: ${message}`);
+      await setGuest(guest.id, {
+        ...(await reconcileOutputs(updated)),
+        status: "ERROR",
+        statusDetail: `migrated to ${target.name} but failed to start: ${message}`,
+      });
+      await finish(job, "FAILED", { error: message });
+      return;
+    }
   }
 
   await setGuest(guest.id, {

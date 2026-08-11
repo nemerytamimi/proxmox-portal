@@ -11,7 +11,7 @@ import {
 import { JobLog } from "@/components/JobLog";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { liveStatus } from "@/lib/guests";
+import { liveStatus, observedAddress } from "@/lib/guests";
 import { willReaddress } from "@/lib/ipam";
 import { placeableNodes } from "@/lib/nodes";
 import { isBusy } from "@/lib/types";
@@ -52,7 +52,10 @@ export default async function GuestPage({
   const latestJob = guest.jobs[0];
 
   // Live from Proxmox: the state file says what we asked for, not what is.
-  const live = guest.status === "DESTROYED" ? null : await liveStatus(guest.id);
+  const [live, observed] =
+    guest.status === "DESTROYED"
+      ? [null, null]
+      : await Promise.all([liveStatus(guest.id), observedAddress(guest.id)]);
   const running = live?.status === "running";
 
   let targets: MigrationTarget[] = [];
@@ -91,7 +94,17 @@ export default async function GuestPage({
           <Row label="Kind" value={guest.kind} />
           <Row label="Node" value={guest.node.name} />
           <Row label="VMID" value={guest.vmid} />
-          <Row label="Address" value={guest.ipv4Address} />
+          <Row
+            label="Address"
+            value={
+              guest.ipv4Address === "dhcp"
+                ? (observed ?? "DHCP — not reported yet")
+                : guest.ipv4Address
+            }
+          />
+          {observed && guest.ipv4Address !== "dhcp" && !guest.ipv4Address.startsWith(observed) && (
+            <Row label="Observed" value={observed} />
+          )}
           <Row label="Gateway" value={guest.ipv4Gateway ?? "—"} />
           <Row label="Bridge" value={`${guest.bridge}${guest.mtu ? ` (MTU ${guest.mtu})` : ""}`} />
           <Row
