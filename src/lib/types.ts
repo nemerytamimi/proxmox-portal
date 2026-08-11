@@ -30,6 +30,35 @@ export type JobKind = (typeof JOB_KINDS)[number];
 export const JOB_STATES = ["QUEUED", "RUNNING", "OK", "FAILED", "CANCELLED"] as const;
 export type JobState = (typeof JOB_STATES)[number];
 
+/**
+ * The OS families Proxmox accepts for a container. This is a closed set in the
+ * provider — anything else is rejected at apply time, minutes after the order
+ * was approved and a VMID allocated — so the order form constrains it up front.
+ */
+export const OS_TYPES = [
+  "debian",
+  "ubuntu",
+  "alpine",
+  "archlinux",
+  "centos",
+  "devuan",
+  "fedora",
+  "gentoo",
+  "nixos",
+  "opensuse",
+  "unmanaged",
+] as const;
+export type OsType = (typeof OS_TYPES)[number];
+
+/** Guess the family from a template's file name, e.g. debian-13-standard… */
+export function osTypeFromTemplate(volid: string): OsType {
+  const name = volid.toLowerCase();
+  for (const type of OS_TYPES) {
+    if (type !== "unmanaged" && name.includes(type)) return type;
+  }
+  return "debian";
+}
+
 export const ADDRESSING_MODES = ["static", "dhcp"] as const;
 export type Addressing = (typeof ADDRESSING_MODES)[number];
 

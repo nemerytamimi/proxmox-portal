@@ -4,6 +4,7 @@ import { useActionState, useState } from "react";
 
 import { submitOrderAction, type OrderFormState } from "./actions";
 import type { CatalogEntry } from "@/lib/catalog";
+import { OS_TYPES, osTypeFromTemplate } from "@/lib/types";
 import { Alert, Button, Field, inputClass } from "@/components/ui";
 
 export interface NodeOption {
@@ -24,6 +25,8 @@ export function OrderForm({
   nodes: NodeOption[];
 }) {
   const [kind, setKind] = useState<"LXC" | "VM">("LXC");
+  const [template, setTemplate] = useState("");
+  const [osType, setOsType] = useState<string>("debian");
   const [state, action, pending] = useActionState<OrderFormState, FormData>(
     submitOrderAction,
     {},
@@ -91,7 +94,18 @@ export function OrderForm({
               : undefined
           }
         >
-          <select name="templateFileId" required className={inputClass}>
+          <select
+            name="templateFileId"
+            required
+            value={template}
+            onChange={(e) => {
+              setTemplate(e.target.value);
+              // Keep the OS family in step with the image the user picked;
+              // a mismatch is only rejected once Terraform runs.
+              if (e.target.value) setOsType(osTypeFromTemplate(e.target.value));
+            }}
+            className={inputClass}
+          >
             <option value="">Select…</option>
             {catalog.map((c) => (
               <option key={c.volid} value={c.volid}>
@@ -149,20 +163,32 @@ export function OrderForm({
       </div>
 
       <div className="grid gap-5 sm:grid-cols-2">
-        <Field
-          label={kind === "LXC" ? "OS type" : "Cloud-init user"}
-          hint={
-            kind === "LXC"
-              ? "Must match the template family."
-              : "The account cloud-init creates."
-          }
-        >
-          <input
-            name={kind === "LXC" ? "osType" : "ciUser"}
-            defaultValue="debian"
-            className={inputClass}
-          />
-        </Field>
+        {kind === "LXC" ? (
+          <Field
+            label="OS family"
+            hint="Set automatically from the template. This is not a login name — credentials are further down."
+          >
+            <select
+              name="osType"
+              value={osType}
+              onChange={(e) => setOsType(e.target.value)}
+              className={inputClass}
+            >
+              {OS_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </Field>
+        ) : (
+          <Field
+            label="Cloud-init user"
+            hint="The login account cloud-init creates in the VM."
+          >
+            <input name="ciUser" defaultValue="debian" className={inputClass} />
+          </Field>
+        )}
 
         <Field
           label="Preferred node"

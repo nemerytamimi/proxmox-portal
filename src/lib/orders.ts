@@ -6,7 +6,7 @@ import { encryptSecret } from "./crypto";
 import { allocate } from "./ipam";
 import { checkQuota } from "./quota";
 import { unusableReason } from "./nodes";
-import { GUEST_KINDS } from "./types";
+import { GUEST_KINDS, OS_TYPES } from "./types";
 
 /**
  * Order lifecycle: a user describes what they want, an admin decides where it
@@ -33,7 +33,9 @@ export const orderSchema = z
     diskGb: z.coerce.number().int().min(4).max(2048),
     templateFileId: z.string().trim().min(1).optional(),
     cloneVmId: z.coerce.number().int().positive().optional(),
-    osType: z.string().trim().default("debian"),
+    // Constrained rather than free text: Proxmox rejects anything outside this
+    // set, and it only finds out at apply time.
+    osType: z.enum(OS_TYPES).default("debian"),
     ciUser: z.string().trim().default("debian"),
     sshPublicKey: z
       .string()
