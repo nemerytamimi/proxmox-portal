@@ -1,0 +1,29 @@
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# Secrets and local state
+.env
+.env.local
+*.tfvars
+!*.tfvars.example
+
+# Runtime data (lives in /var/lib/proxmox-portal in production)
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Terraform working dirs are generated per guest at runtime
+workspaces/
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+
+next-env.d.ts
+*.tsbuildinfo
+.DS_Store

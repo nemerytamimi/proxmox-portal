@@ -1,0 +1,248 @@
+// Proxmox self-service portal.
+//
+// SQLite does not support Prisma enums, so every status/kind column is a String
+// constrained by the union types in src/lib/types.ts.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String?
+  passwordHash String
+  // "USER" | "ADMIN". The first account to register becomes ADMIN.
+  role         String   @default("USER")
+  disabled     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  quota     Quota?
+  orders    Order[]
+  guests    Guest[]
+  auditLogs AuditLog[]
+
+  @@index([role])
+}
+
+/// Per-user resource ceiling. Absent means the global defaults in
+/// src/lib/quota.ts apply.
+model Quota {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  maxGuests    Int
+  maxCores     Int
+  maxMemoryMb  Int
+  maxDiskGb    Int
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// A Proxmox node, discovered from the cluster API and then annotated by an
+/// admin with the network profile guests on it should use.
+///
+/// Discovery inserts unknown nodes with configured=false so a node that comes
+/// online later (or is newly added) shows up on its own but cannot be targeted
+/// until an admin fills in the network details. This is what makes the offline
+/// `server` node usable the moment it returns, without a code change.
+model PveNode {
+  id     String @id @default(cuid())
+  name   String @unique
+
+  // Refreshed from the PVE API on every discovery sync.
+  online      Boolean  @default(false)
+  maxCpu      Int?
+  maxMemoryMb Int?
+  lastSeenAt  DateTime?
+
+  // Admin-controlled. A node cannot be selected for provisioning until
+  // configured is true.
+  configured Boolean @default(false)
+  /// Whether QEMU VMs may be placed here. False for nodes without /dev/kvm
+  /// (e.g. vmi3482497, a VPS with no nested virtualisation).
+  allowVms   Boolean @default(false)
+  allowLxc   Boolean @default(true)
+
+  // --- guest network profile (per node: bridges are NOT cluster-wide) ---
+  bridge     String  @default("vmbr0")
+  mtu        Int     @default(0)
+  /// "static" | "dhcp"
+  addressing String  @default("dhcp")
+  /// For addressing="static": the /24 prefix, e.g. "10.98.3".
+  subnetPrefix String?
+  gateway      String?
+  /// Last-octet range the portal may allocate from. The house convention is
+  /// that the octet equals the VMID, so this doubles as the VMID pool.
+  ipPoolStart  Int?
+  ipPoolEnd    Int?
+  dnsServers   String  @default("1.1.1.1,8.8.8.8")
+
+  // --- storage defaults ---
+  defaultDatastore  String @default("local")
+  templateDatastore String @default("local")
+
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders Order[]
+  guests Guest[]
+}
+
+/// A user's request. Nothing is created on the cluster until an admin approves
+/// it and picks the target node.
+model Order {
+  id      String @id @default(cuid())
+  userId  String
+  /// "LXC" | "VM"
+  kind    String
+
+  hostname String
+  cores    Int
+  memoryMb Int
+  swapMb   Int    @default(512)
+  diskGb   Int
+
+  /// LXC: the vztmpl volume id. VM: the cloud image volume id or null when
+  /// cloning.
+  templateFileId String?
+  /// VM only: template/VM id to clone instead of importing an image.
+  cloneVmId      Int?
+  osType         String @default("debian")
+  /// VM only: the cloud-init user account name.
+  ciUser         String @default("debian")
+
+  sshPublicKey String?
+  /// AES-256-GCM ciphertext. Written once, never rendered back to any UI.
+  rootPasswordEnc String?
+
+  /// The user's preference; the admin still chooses. Null means "no preference".
+  preferredNodeId String?
+
+  /// "PENDING" | "APPROVED" | "REJECTED"
+  status     String  @default("PENDING")
+  reviewNote String?
+  reviewerId String?
+  reviewedAt DateTime?
+
+  /// Set on approval: the node the admin actually picked.
+  nodeId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  node  PveNode? @relation(fields: [nodeId], references: [id])
+  guest Guest?
+
+  @@index([status])
+  @@index([userId])
+}
+
+/// A guest that exists (or is being made to exist) on the cluster. One
+/// Terraform workspace per guest.
+model Guest {
+  id      String @id @default(cuid())
+  ownerId String
+  orderId String @unique
+  nodeId  String
+
+  /// "LXC" | "VM"
+  kind     String
+  vmid     Int
+  hostname String
+
+  // Current desired specs. A resize rewrites these, then re-applies.
+  cores    Int
+  memoryMb Int
+  swapMb   Int
+  diskGb   Int
+
+  /// "10.98.3.140/24" or "dhcp"
+  ipv4Address String
+  ipv4Gateway String?
+  bridge      String
+  mtu         Int    @default(0)
+
+  templateFileId String?
+  cloneVmId      Int?
+  osType         String  @default("debian")
+  ciUser         String  @default("debian")
+  sshPublicKey   String?
+  rootPasswordEnc String?
+
+  /// "PROVISIONING" | "ACTIVE" | "UPDATING" | "MIGRATING" | "DESTROYING"
+  /// | "DESTROYED" | "ERROR"
+  status       String @default("PROVISIONING")
+  statusDetail String?
+
+  workspacePath String
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  destroyedAt DateTime?
+
+  owner User    @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  order Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  node  PveNode @relation(fields: [nodeId], references: [id])
+  jobs  Job[]
+
+  @@unique([nodeId, vmid])
+  @@index([ownerId])
+  @@index([status])
+}
+
+/// A unit of Terraform (or PVE) work. The worker drains these one at a time
+/// per guest, so a guest can never have two applies racing on its workspace.
+model Job {
+  id      String @id @default(cuid())
+  guestId String
+
+  /// "APPLY" | "DESTROY" | "MIGRATE"
+  kind String
+  /// "QUEUED" | "RUNNING" | "OK" | "FAILED" | "CANCELLED"
+  state String @default("QUEUED")
+
+  /// MIGRATE only: the node to move to.
+  targetNodeId String?
+
+  logPath  String
+  exitCode Int?
+  error    String?
+
+  createdBy  String?
+  createdAt  DateTime  @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  guest Guest @relation(fields: [guestId], references: [id], onDelete: Cascade)
+
+  @@index([state])
+  @@index([guestId])
+}
+
+model AuditLog {
+  id      String  @id @default(cuid())
+  actorId String?
+  action  String
+  target  String?
+  detail  String?
+  createdAt DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+}
+
+/// Single-row table for cluster-wide portal settings an admin can change.
+model Setting {
+  key   String @id
+  value String
+}
