@@ -265,7 +265,11 @@ export function tfvarsFor(
     cores: guest.cores,
     memory: guest.memoryMb,
     disk_size: guest.diskGb,
-    datastore_id: node.defaultDatastore,
+    // The guest's own datastore, not the node's default. After a migration the
+    // disk sits wherever PVE put it; handing Terraform the target node's
+    // preferred storage instead would read as a storage change and force a
+    // replacement, destroying the disk to "fix" it.
+    datastore_id: guest.datastore || node.defaultDatastore,
     bridge: guest.bridge,
     mtu: guest.mtu,
     ipv4_address: guest.ipv4Address,

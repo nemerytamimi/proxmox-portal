@@ -171,6 +171,12 @@ model Guest {
   bridge      String
   mtu         Int    @default(0)
 
+  /// Where this guest's disk actually lives. Seeded from the node's default at
+  /// creation, then kept in step with reality after a migration: PVE decides
+  /// which storage the disk lands on, and a datastore change in Terraform
+  /// forces a replacement that would destroy it.
+  datastore String @default("local")
+
   templateFileId String?
   cloneVmId      Int?
   osType         String  @default("debian")
@@ -194,7 +200,13 @@ model Guest {
   node  PveNode @relation(fields: [nodeId], references: [id])
   jobs  Job[]
 
-  @@unique([nodeId, vmid])
+  /// Deliberately an index, not a unique constraint. Destroyed guests are kept
+  /// for audit, and a unique (nodeId, vmid) would let each one hold its VMID
+  /// hostage forever — with a 90-address pool per node, every destroy would
+  /// permanently burn one. Proxmox is the authority on VMID uniqueness;
+  /// allocation checks the live cluster plus active guests, and approveOrder
+  /// re-checks immediately before the insert.
+  @@index([nodeId, vmid])
   @@index([ownerId])
   @@index([status])
 }

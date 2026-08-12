@@ -25,6 +25,7 @@ import {
   listClusterGuests,
   migrateGuest,
   powerAction,
+  rootDatastore,
   waitForTask,
 } from "../src/lib/pve";
 import {
@@ -373,6 +374,19 @@ async function runMigrate(
       job.logPath,
       `container did reach ${target.name} despite the task error; continuing to reconcile state`,
     );
+  }
+
+  // Ask PVE where the disk actually landed before regenerating the workspace.
+  // The target node's preferred storage is irrelevant here — what matters is
+  // the volume that now exists, because a datastore change in the plan is a
+  // replacement, not a move.
+  const landedOn = await rootDatastore("LXC", target.name, guest.vmid);
+  if (landedOn && landedOn !== guest.datastore) {
+    await logLine(
+      job.logPath,
+      `disk now lives on "${landedOn}" (was "${guest.datastore}"); recording that so the next plan is not a replacement`,
+    );
+    moved.datastore = landedOn;
   }
 
   await setGuest(guest.id, moved);

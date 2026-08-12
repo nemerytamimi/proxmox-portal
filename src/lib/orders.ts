@@ -145,6 +145,21 @@ export async function approveOrder(
 
   const allocation = await allocate(node);
 
+  // Belt and braces: allocation consults the live cluster and active guests,
+  // but two admins approving at once could still land on the same id.
+  const collision = await prisma.guest.findFirst({
+    where: {
+      nodeId: node.id,
+      vmid: allocation.vmid,
+      status: { not: "DESTROYED" },
+    },
+  });
+  if (collision) {
+    throw new OrderError(
+      `VMID ${allocation.vmid} on ${node.name} was just taken by "${collision.hostname}". Try approving again.`,
+    );
+  }
+
   const guest = await prisma.$transaction(async (tx) => {
     await tx.order.update({
       where: { id: orderId },
@@ -173,6 +188,7 @@ export async function approveOrder(
         ipv4Gateway: allocation.ipv4Gateway,
         bridge: node.bridge,
         mtu: node.mtu,
+        datastore: node.defaultDatastore,
         templateFileId: order.templateFileId,
         cloneVmId: order.cloneVmId,
         osType: order.osType,

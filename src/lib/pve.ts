@@ -238,6 +238,35 @@ export async function guestStatus(
 }
 
 /**
+ * The storage a guest's root disk currently sits on, read from its config.
+ *
+ * PVE chooses this during a migration — it keeps the same storage name when the
+ * target node has one, and falls back otherwise. Terraform must be told the
+ * truth: a datastore change in the plan forces a replacement, which destroys
+ * the disk.
+ */
+export async function rootDatastore(
+  kind: "LXC" | "VM",
+  node: string,
+  vmid: number,
+): Promise<string | null> {
+  try {
+    const config = await call<Record<string, unknown>>(
+      "GET",
+      `${base(kind, node, vmid)}/config`,
+    );
+    // "local:140/vm-140-disk-0.raw,size=4G" or "local-lvm:vm-140-disk-0,size=20G"
+    const volume = String(
+      (kind === "LXC" ? config.rootfs : (config.scsi0 ?? config.virtio0)) ?? "",
+    );
+    const storage = volume.split(":")[0];
+    return storage && !storage.startsWith("/") ? storage : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The address a guest actually holds right now, which is not always the one
  * that was asked for — on a DHCP node it is not knowable in advance at all.
  *
