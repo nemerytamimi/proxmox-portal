@@ -14,7 +14,8 @@ variable "vm_id" {
 }
 
 ########################################
-# Source image: either a cloud image file or an existing template to clone
+# Source: a cloud image to import, an existing template to clone, or an
+# installer ISO
 ########################################
 
 variable "cloud_image_file_id" {
@@ -26,6 +27,12 @@ variable "cloud_image_file_id" {
 variable "clone_vm_id" {
   description = "Existing template/VM id to clone from. Mutually exclusive with cloud_image_file_id."
   type        = number
+  default     = null
+}
+
+variable "iso_file_id" {
+  description = "Installer ISO volume id, e.g. local:iso/debian-13.1.0-amd64-netinst.iso. The VM gets a blank disk and boots it; no cloud-init. Mutually exclusive with cloud_image_file_id and clone_vm_id."
+  type        = string
   default     = null
 }
 

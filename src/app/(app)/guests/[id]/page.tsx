@@ -11,6 +11,7 @@ import {
 import { JobLog } from "@/components/JobLog";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { env } from "@/lib/env";
 import { liveStatus, observedAddress } from "@/lib/guests";
 import { willReaddress } from "@/lib/ipam";
 import { placeableNodes } from "@/lib/nodes";
@@ -58,6 +59,36 @@ export default async function GuestPage({
       : await Promise.all([liveStatus(guest.id), observedAddress(guest.id)]);
   const running = live?.status === "running";
 
+  const isIso = guest.kind === "VM" && !!guest.isoFileId;
+  const source =
+    guest.kind === "LXC"
+      ? guest.templateFileId
+      : (guest.isoFileId ??
+        guest.templateFileId ??
+        (guest.cloneVmId ? `clone of ${guest.cloneVmId}` : null));
+
+  // Proxmox's own noVNC console for this VM. It needs a Proxmox login; the
+  // portal has no console of its own.
+  let consoleUrl: string | null = null;
+  if (isIso && guest.status !== "DESTROYED") {
+    try {
+      const q = new URLSearchParams({
+        console: "kvm",
+        novnc: "1",
+        vmid: String(guest.vmid),
+        vmname: guest.hostname,
+        node: guest.node.name,
+      });
+      consoleUrl = `${env.pveEndpoint}/?${q}`;
+    } catch {
+      consoleUrl = null;
+    }
+  }
+  const dns = guest.node.dnsServers
+    .split(",")
+    .map((d) => d.trim())
+    .filter(Boolean);
+
   let targets: MigrationTarget[] = [];
   if (isAdmin && guest.status !== "DESTROYED") {
     const nodes = await placeableNodes(guest.kind as "LXC" | "VM");
@@ -94,6 +125,12 @@ export default async function GuestPage({
           <Row label="Kind" value={guest.kind} />
           <Row label="Node" value={guest.node.name} />
           <Row label="VMID" value={guest.vmid} />
+          {source && (
+            <Row
+              label={isIso ? "Installed from ISO" : guest.kind === "LXC" ? "Template" : "Image"}
+              value={<span className="break-all font-mono text-xs">{source}</span>}
+            />
+          )}
           <Row
             label="Address"
             value={
@@ -149,6 +186,66 @@ export default async function GuestPage({
         </Panel>
       </div>
 
+      {isIso && guest.status !== "DESTROYED" && (
+        <Panel
+          title="Install from ISO"
+          description="This VM booted the installer on a blank disk. Nothing inside it is configured by the portal: finish the install from the console."
+        >
+          <ol className="list-decimal space-y-2 pl-5 text-sm">
+            <li>
+              Open the console
+              {consoleUrl ? (
+                <>
+                  {" "}
+                  in Proxmox:{" "}
+                  <a
+                    href={consoleUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-accent underline"
+                  >
+                    VM {guest.vmid} on {guest.node.name}
+                  </a>{" "}
+                  <span className="text-muted">(needs a Proxmox login)</span>
+                </>
+              ) : (
+                <> for VM {guest.vmid} on {guest.node.name} in Proxmox.</>
+              )}
+            </li>
+            <li>
+              Configure the network in the installer
+              {guest.ipv4Address === "dhcp" ? (
+                <> as DHCP; the address shows above once the VM reports one.</>
+              ) : (
+                <>
+                  {" "}
+                  with the address reserved for this VM:
+                  <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 rounded-md border border-line bg-panel-2 p-3 font-mono text-xs">
+                    <dt className="text-muted">Address</dt>
+                    <dd>{guest.ipv4Address}</dd>
+                    <dt className="text-muted">Gateway</dt>
+                    <dd>{guest.ipv4Gateway ?? "—"}</dd>
+                    <dt className="text-muted">DNS</dt>
+                    <dd>{dns.join(", ") || "—"}</dd>
+                    {guest.mtu > 0 && (
+                      <>
+                        <dt className="text-muted">MTU</dt>
+                        <dd>{guest.mtu}</dd>
+                      </>
+                    )}
+                  </dl>
+                </>
+              )}
+            </li>
+            <li>Create your user and password in the installer.</li>
+            <li>
+              Reboot when it finishes. The VM boots from its disk from then on; the
+              ISO stays attached until someone ejects it in Proxmox.
+            </li>
+          </ol>
+        </Panel>
+      )}
+
       {guest.status !== "DESTROYED" && (
         <Panel
           title="Power"
@@ -191,7 +288,9 @@ export default async function GuestPage({
           title="Migrate"
           description={
             guest.kind === "VM"
-              ? "Terraform issues a live migration when the node changes."
+              ? isIso
+                ? "Terraform issues a live migration when the node changes. Eject the install ISO in Proxmox first: Proxmox refuses to migrate a VM with a CD-ROM on node-local storage."
+                : "Terraform issues a live migration when the node changes."
               : "Containers are moved through the Proxmox API and then re-imported into Terraform state — the provider cannot migrate them directly."
           }
         >

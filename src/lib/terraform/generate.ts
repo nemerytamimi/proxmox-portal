@@ -175,6 +175,10 @@ variable "clone_vm_id" {
   type    = number
   default = null
 }
+variable "iso_file_id" {
+  type    = string
+  default = null
+}
 variable "cores" { type = number }
 variable "memory" { type = number }
 variable "disk_size" { type = number }
@@ -215,6 +219,7 @@ module "guest" {
 
   cloud_image_file_id = var.cloud_image_file_id
   clone_vm_id         = var.clone_vm_id
+  iso_file_id         = var.iso_file_id
 
   cores        = var.cores
   memory       = var.memory
@@ -289,11 +294,15 @@ export function tfvarsFor(
     };
   }
 
+  // Exactly one source reaches the module: an ISO install, a clone, or a
+  // cloud image import.
   return {
     ...common,
     ci_user: guest.ciUser,
-    cloud_image_file_id: guest.cloneVmId ? null : guest.templateFileId,
-    clone_vm_id: guest.cloneVmId,
+    cloud_image_file_id:
+      guest.isoFileId || guest.cloneVmId ? null : guest.templateFileId,
+    clone_vm_id: guest.isoFileId ? null : guest.cloneVmId,
+    iso_file_id: guest.isoFileId,
   };
 }
 

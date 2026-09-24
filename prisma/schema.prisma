@@ -110,11 +110,14 @@ model Order {
   swapMb   Int    @default(512)
   diskGb   Int
 
-  /// LXC: the vztmpl volume id. VM: the cloud image volume id or null when
-  /// cloning.
+  /// LXC: the vztmpl volume id. VM: the cloud image volume id, or null when
+  /// cloning or installing from an ISO.
   templateFileId String?
   /// VM only: template/VM id to clone instead of importing an image.
   cloneVmId      Int?
+  /// VM only: an installer ISO volume id (e.g. local:iso/debian-13.iso). The
+  /// VM gets a blank disk and boots the ISO; there is no cloud-init.
+  isoFileId      String?
   osType         String @default("debian")
   /// VM only: the cloud-init user account name.
   ciUser         String @default("debian")
@@ -179,6 +182,7 @@ model Guest {
 
   templateFileId String?
   cloneVmId      Int?
+  isoFileId      String?
   osType         String  @default("debian")
   ciUser         String  @default("debian")
   sshPublicKey   String?

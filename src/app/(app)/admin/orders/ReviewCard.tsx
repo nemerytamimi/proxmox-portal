@@ -28,6 +28,8 @@ export interface PendingOrder {
   swapMb: number;
   diskGb: number;
   templateLabel: string;
+  /** "Template", "Cloud image", "ISO installer" or "Clone". */
+  source: string;
   requester: string;
   requestedAt: string;
   preferredNodeName: string | null;
@@ -77,9 +79,7 @@ export function ReviewCard({
             </dd>
           </div>
           <div className="flex justify-between gap-4">
-            <dt className="text-muted">
-              {order.kind === "LXC" ? "Template" : "Image"}
-            </dt>
+            <dt className="text-muted">{order.source}</dt>
             <dd className="text-right">{order.templateLabel}</dd>
           </div>
           <div className="flex justify-between gap-4">
@@ -94,7 +94,8 @@ export function ReviewCard({
                 order.hasPassword ? "password" : null,
               ]
                 .filter(Boolean)
-                .join(" + ") || "none"}
+                .join(" + ") ||
+                (order.source === "ISO installer" ? "set in the installer" : "none")}
             </dd>
           </div>
         </dl>

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { audit } from "./audit";
+import { volumeOnNode } from "./catalog";
 import { prisma } from "./db";
 import { encryptSecret } from "./crypto";
 import { allocate } from "./ipam";
@@ -33,6 +34,7 @@ export const orderSchema = z
     diskGb: z.coerce.number().int().min(4).max(2048),
     templateFileId: z.string().trim().min(1).optional(),
     cloneVmId: z.coerce.number().int().positive().optional(),
+    isoFileId: z.string().trim().min(1).optional(),
     // Constrained rather than free text: Proxmox rejects anything outside this
     // set, and it only finds out at apply time.
     osType: z.enum(OS_TYPES).default("debian"),
@@ -52,14 +54,29 @@ export const orderSchema = z
     message: "A container template is required",
     path: ["templateFileId"],
   })
-  .refine((o) => o.kind === "LXC" || !!o.templateFileId || !!o.cloneVmId, {
-    message: "Pick a cloud image or a template to clone",
-    path: ["templateFileId"],
+  .refine(
+    (o) =>
+      o.kind === "LXC" ||
+      [o.templateFileId, o.cloneVmId, o.isoFileId].filter(Boolean).length === 1,
+    {
+      message: "Pick exactly one of a cloud image, an ISO, or a template to clone",
+      path: ["templateFileId"],
+    },
+  )
+  .refine((o) => o.kind === "VM" || !o.isoFileId, {
+    message: "ISOs are for virtual machines only",
+    path: ["isoFileId"],
   })
-  .refine((o) => !!o.sshPublicKey || !!o.rootPassword, {
+  // An ISO installer asks for the account itself; nothing is injected.
+  .refine((o) => !!o.isoFileId || !!o.sshPublicKey || !!o.rootPassword, {
     message: "Provide an SSH public key or a root password — otherwise you cannot log in",
     path: ["sshPublicKey"],
   });
+
+/** Whether an order or guest boots an installer ISO rather than a prepared image. */
+export function isIsoInstall(g: { kind: string; isoFileId: string | null }): boolean {
+  return g.kind === "VM" && !!g.isoFileId;
+}
 
 export type OrderInput = z.infer<typeof orderSchema>;
 
@@ -103,6 +120,7 @@ export async function createOrder(
       diskGb: input.diskGb,
       templateFileId: input.templateFileId ?? null,
       cloneVmId: input.cloneVmId ?? null,
+      isoFileId: input.kind === "VM" ? (input.isoFileId ?? null) : null,
       osType: input.osType,
       ciUser: input.ciUser,
       sshPublicKey: input.sshPublicKey || null,
@@ -141,6 +159,15 @@ export async function approveOrder(
   const reason = unusableReason(node, order.kind as "LXC" | "VM");
   if (reason) {
     throw new OrderError(`${node.name} cannot host this guest: ${reason}.`);
+  }
+
+  // Node-local storage differs per node: without this check the apply fails
+  // minutes later, after a VMID and address have been allocated.
+  const image = imageOf(order);
+  if (image && !(await volumeOnNode(node.name, image.volid, image.contentType))) {
+    throw new OrderError(
+      `${node.name} does not have ${image.volid}. Pick a node that does, or copy the file to this node first.`,
+    );
   }
 
   const allocation = await allocate(node);
@@ -191,6 +218,7 @@ export async function approveOrder(
         datastore: node.defaultDatastore,
         templateFileId: order.templateFileId,
         cloneVmId: order.cloneVmId,
+        isoFileId: order.isoFileId,
         osType: order.osType,
         ciUser: order.ciUser,
         sshPublicKey: order.sshPublicKey,
@@ -265,4 +293,20 @@ export async function enqueue(
   });
 
   return job.id;
+}
+
+/** The storage volume an order is built from, if any (a clone has none). */
+export function imageOf(order: {
+  kind: string;
+  templateFileId: string | null;
+  isoFileId: string | null;
+}): { volid: string; contentType: "vztmpl" | "import" | "iso" } | null {
+  if (order.kind === "VM" && order.isoFileId) {
+    return { volid: order.isoFileId, contentType: "iso" };
+  }
+  if (!order.templateFileId) return null;
+  return {
+    volid: order.templateFileId,
+    contentType: order.kind === "LXC" ? "vztmpl" : "import",
+  };
 }

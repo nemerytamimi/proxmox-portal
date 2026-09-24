@@ -33,6 +33,8 @@ export interface PveStorage {
   content: string[];
   avail?: number;
   total?: number;
+  /** 1 when the storage is usable from this node right now. */
+  active?: number;
 }
 
 export interface PveContent {
@@ -182,7 +184,7 @@ export async function listStorage(node: string): Promise<PveStorage[]> {
   return stores.map((s) => ({ ...s, content: (s.content ?? "").split(",") }));
 }
 
-/** Container templates (`vztmpl`) or cloud images (`import`/`iso`). */
+/** Container templates (`vztmpl`), cloud images (`import`) or installer ISOs (`iso`). */
 export async function listContent(
   node: string,
   storage: string,

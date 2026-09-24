@@ -10,6 +10,9 @@ terraform {
 locals {
   use_cloud_image = var.cloud_image_file_id != null
   use_clone       = var.clone_vm_id != null
+  # An installer ISO: blank disk, ISO on a CD-ROM, no cloud-init. Whoever runs
+  # the installer sets the network and credentials.
+  use_iso = var.iso_file_id != null
 }
 
 resource "proxmox_virtual_environment_vm" "this" {
@@ -35,6 +38,19 @@ resource "proxmox_virtual_environment_vm" "this" {
   bios    = var.bios
   machine = var.machine
 
+  # Disk first: while it is still blank the firmware falls through to the ISO,
+  # and once the installer has written a bootloader the VM boots the installed
+  # system without anyone ejecting the CD.
+  boot_order = local.use_iso ? [var.disk_interface, "ide2", "net0"] : null
+
+  dynamic "cdrom" {
+    for_each = local.use_iso ? [1] : []
+    content {
+      file_id   = var.iso_file_id
+      interface = "ide2"
+    }
+  }
+
   dynamic "clone" {
     for_each = local.use_clone ? [1] : []
     content {
@@ -59,7 +75,8 @@ resource "proxmox_virtual_environment_vm" "this" {
   }
 
   # Root disk. With a cloud image the qcow2 is imported into the datastore;
-  # with a clone the disk already exists and this block only resizes it.
+  # with a clone the disk already exists and this block only resizes it; with
+  # an ISO it is created blank for the installer.
   disk {
     datastore_id = var.datastore_id
     interface    = var.disk_interface
@@ -88,37 +105,42 @@ resource "proxmox_virtual_environment_vm" "this" {
     vlan_id = var.vlan_id
   }
 
-  initialization {
-    datastore_id = var.datastore_id
-    interface    = "ide2"
+  # Cloud-init only for cloud images and clones. An installer ignores it, and
+  # ide2 is where the ISO goes.
+  dynamic "initialization" {
+    for_each = local.use_iso ? [] : [1]
+    content {
+      datastore_id = var.datastore_id
+      interface    = "ide2"
 
-    ip_config {
-      ipv4 {
-        address = var.ipv4_address
-        gateway = var.ipv4_address == "dhcp" ? null : var.ipv4_gateway
+      ip_config {
+        ipv4 {
+          address = var.ipv4_address
+          gateway = var.ipv4_address == "dhcp" ? null : var.ipv4_gateway
+        }
       }
-    }
 
-    dynamic "dns" {
-      for_each = length(var.dns_servers) > 0 || var.dns_domain != null ? [1] : []
-      content {
-        domain  = var.dns_domain
-        servers = var.dns_servers
+      dynamic "dns" {
+        for_each = length(var.dns_servers) > 0 || var.dns_domain != null ? [1] : []
+        content {
+          domain  = var.dns_domain
+          servers = var.dns_servers
+        }
       }
-    }
 
-    # user_account and user_data_file_id are mutually exclusive in cloud-init:
-    # a custom user-data snippet fully replaces the generated one.
-    dynamic "user_account" {
-      for_each = var.user_data_file_id == null ? [1] : []
-      content {
-        username = var.ci_user
-        password = var.ci_password
-        keys     = var.ssh_public_keys
+      # user_account and user_data_file_id are mutually exclusive in cloud-init:
+      # a custom user-data snippet fully replaces the generated one.
+      dynamic "user_account" {
+        for_each = var.user_data_file_id == null ? [1] : []
+        content {
+          username = var.ci_user
+          password = var.ci_password
+          keys     = var.ssh_public_keys
+        }
       }
-    }
 
-    user_data_file_id = var.user_data_file_id
+      user_data_file_id = var.user_data_file_id
+    }
   }
 
   serial_device {} # cloud images expect a serial console
@@ -130,6 +152,10 @@ resource "proxmox_virtual_environment_vm" "this" {
   lifecycle {
     ignore_changes = [
       disk[0].import_from, # only meaningful at create time
+      # The ISO is only needed for the install: ejecting it in Proxmox
+      # afterwards (or the ISO being deleted) must not make Terraform put it
+      # back.
+      cdrom,
       # Cloud-init credentials cannot be read back from Proxmox, so a VM that
       # enters state via `terraform import` would otherwise look like it needs
       # replacing. See the same note in modules/lxc/main.tf.

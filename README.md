@@ -12,8 +12,13 @@ per-guest workspace. Nothing is created by clicking directly at the Proxmox API.
 
 - **Registration and login** — email + password. The first account created
   becomes the administrator.
-- **Ordering** — container templates and cloud images are read live from the
-  cluster's storage, so anything downloaded to Proxmox is immediately orderable.
+- **Ordering** — container templates, cloud images and installer ISOs are read
+  live from every storage on the cluster that holds them, so anything
+  downloaded to Proxmox is immediately orderable. Picking a preferred node
+  narrows the list to what that node actually has.
+- **ISO installs** — a VM ordered from an ISO gets a blank disk with the ISO
+  attached, boots the installer, and is finished from the Proxmox console. The
+  guest page shows the address, gateway and DNS to enter.
 - **Quotas** — per-user ceilings on guests, cores, memory and disk, counting
   both running guests and orders still awaiting approval.
 - **Approval with node selection** — the admin picks the target node from a

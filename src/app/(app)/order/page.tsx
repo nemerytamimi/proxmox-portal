@@ -1,5 +1,5 @@
 import { OrderForm, type NodeOption } from "./OrderForm";
-import { listCloudImages, listTemplates } from "@/lib/catalog";
+import { listTemplates, listVmImages } from "@/lib/catalog";
 import { prisma } from "@/lib/db";
 import { Panel } from "@/components/ui";
 
@@ -10,7 +10,9 @@ export default async function OrderPage() {
   // Proxmox is orderable immediately.
   const [templates, images, nodes] = await Promise.all([
     listTemplates().catch(() => []),
-    listCloudImages().catch(() => []),
+    // Cloud images and ISOs across every VM-capable node; narrowed live to
+    // one node when the user picks a preferred node.
+    listVmImages().catch(() => []),
     prisma.pveNode.findMany({
       where: { online: true, configured: true },
       orderBy: { name: "asc" },
