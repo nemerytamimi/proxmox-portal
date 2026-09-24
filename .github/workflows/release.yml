@@ -1,0 +1,164 @@
+name: Release
+
+# Publishing a GitHub release promotes an image that build.yml has already
+# built and smoke-tested; nothing is rebuilt. The source is `latest` when it
+# was built from the release commit (the usual case: releasing the head of the
+# default branch), otherwise the `sha-<commit>` image of that commit. Either
+# way the release tag ends up on the exact digest that passed CI.
+#
+# Tags added:  <release tag> (e.g. v1.2.3), and for semver tags 1.2.3 and 1.2.
+#
+# If the build for the release commit is still running (a release created
+# together with its tag triggers both workflows at once), this waits for it.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to publish as a release image (e.g. v1.2.3)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+  # How long to wait for build.yml to publish the image for the release commit.
+  WAIT_MINUTES: "45"
+
+jobs:
+  promote:
+    name: Promote tested image to ${{ github.event.release.tag_name || inputs.tag }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+
+      - name: Resolve release commit
+        id: rel
+        run: |
+          sha="$(git rev-parse HEAD)"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          {
+            echo "sha=$sha"
+            echo "short=${sha::7}"
+            echo "image=$image"
+          } >> "$GITHUB_OUTPUT"
+          echo "Release $RELEASE_TAG is commit $sha"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Locate the tested image for the release commit
+        id: src
+        env:
+          IMAGE: ${{ steps.rel.outputs.image }}
+          SHA: ${{ steps.rel.outputs.sha }}
+          SHORT: ${{ steps.rel.outputs.short }}
+        run: |
+          deadline=$(( SECONDS + WAIT_MINUTES * 60 ))
+          while :; do
+            for tag in latest "sha-$SHORT"; do
+              digest="$(docker buildx imagetools inspect "$IMAGE:$tag" --format '{{json .Manifest}}' 2>/dev/null | jq -r '.digest // empty' || true)"
+              if [ -z "$digest" ]; then
+                echo "$IMAGE:$tag does not exist (yet)"
+                continue
+              fi
+              # Pin by digest from here on, so a push to `latest` mid-release
+              # cannot change what gets promoted.
+              docker pull -q "$IMAGE@$digest" >/dev/null
+              rev="$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE@$digest")"
+              if [ "$rev" = "$SHA" ]; then
+                echo "Using $IMAGE:$tag ($digest), built from $rev"
+                {
+                  echo "tag=$tag"
+                  echo "digest=$digest"
+                  echo "ref=$IMAGE@$digest"
+                } >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "$IMAGE:$tag was built from ${rev:-an unknown commit}, not $SHA"
+            done
+            if (( SECONDS >= deadline )); then
+              echo "::error::No image built from $SHA was published within $WAIT_MINUTES minutes. Check the Build workflow for this commit, then re-run this workflow."
+              exit 1
+            fi
+            echo "Waiting for the Build workflow to publish $SHORT..."
+            sleep 30
+          done
+
+      - name: Verify image before promoting
+        run: bash scripts/ci/smoke-test.sh "${{ steps.src.outputs.ref }}"
+
+      - name: Release tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.rel.outputs.image }}
+          tags: |
+            type=raw,value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
+
+      - name: Retag
+        env:
+          SOURCE: ${{ steps.src.outputs.ref }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          args=()
+          while IFS= read -r t; do
+            [ -n "$t" ] && args+=(--tag "$t")
+          done <<< "$TAGS"
+          # Copies the manifest index server-side: same digest, no rebuild.
+          docker buildx imagetools create "${args[@]}" "$SOURCE"
+
+      - name: Verify release tags point at the tested digest
+        env:
+          DIGEST: ${{ steps.src.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          status=0
+          while IFS= read -r t; do
+            [ -n "$t" ] || continue
+            got="$(docker buildx imagetools inspect "$t" --format '{{json .Manifest}}' | jq -r .digest)"
+            if [ "$got" = "$DIGEST" ]; then
+              echo "ok   $t -> $got"
+            else
+              echo "::error::$t points at $got, expected $DIGEST"
+              status=1
+            fi
+          done <<< "$TAGS"
+          exit "$status"
+
+      - name: Summary
+        env:
+          SOURCE_TAG: ${{ steps.src.outputs.tag }}
+          DIGEST: ${{ steps.src.outputs.digest }}
+          SHA: ${{ steps.rel.outputs.sha }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          {
+            echo "### Release $RELEASE_TAG"
+            echo
+            echo "Promoted \`$SOURCE_TAG\` (commit \`$SHA\`, digest \`$DIGEST\`) to:"
+            echo
+            echo '```'
+            echo "$TAGS"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

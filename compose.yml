@@ -1,0 +1,33 @@
+# Run the portal with Docker instead of systemd units.
+#
+#   cp .env.example portal.env   # fill in; see deploy/install.md
+#   docker compose up -d
+#
+# Keep in sync with the copy embedded in deploy/create-lxc.sh.
+
+x-portal: &portal
+  image: ${PORTAL_IMAGE:-ghcr.io/nemerytamimi/proxmox-portal}:${PORTAL_TAG:-latest}
+  env_file: ${PORTAL_ENV_FILE:-./portal.env}
+  restart: unless-stopped
+  volumes:
+    # The whole of the portal's state: database, Terraform workspaces and
+    # their state, job logs, the SSH key. Back it up as one.
+    - ${PORTAL_DATA:-./data}:/var/lib/proxmox-portal
+
+services:
+  web:
+    <<: *portal
+    command: ["web"]
+    ports:
+      - "${PORTAL_PORT:-3000}:3000"
+
+  worker:
+    <<: *portal
+    command: ["worker"]
+    # The web container owns `prisma db push`; the worker needs its tables.
+    depends_on:
+      web:
+        condition: service_healthy
+    # On stop the worker finishes the job it holds rather than abandoning a
+    # half-applied guest. Give a long apply room to land before SIGKILL.
+    stop_grace_period: 15m

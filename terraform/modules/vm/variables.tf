@@ -241,6 +241,6 @@ variable "migrate" {
     Migrate the VM when node_name changes instead of destroying and recreating
     it. Only supported for QEMU VMs; the provider has no container equivalent.
   EOT
-  type    = bool
-  default = true
+  type        = bool
+  default     = true
 }

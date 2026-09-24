@@ -1,0 +1,23 @@
+.git
+.github
+.kilo
+node_modules
+.next
+out
+build
+dist
+*.tsbuildinfo
+next-env.d.ts
+
+# Secrets and runtime state must never be baked into an image.
+.env
+.env.*
+!.env.example
+*.db
+*.db-*
+data/
+workspaces/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars

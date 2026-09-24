@@ -1,5 +1,20 @@
 # Installing the portal
 
+> **Shortcut:** [`create-lxc.sh`](create-lxc.sh) runs steps 2–6 for you on a PVE
+> node: it creates the container, applies the MTU fix, copies in the SSH key,
+> writes `portal.env` with fresh secrets, and installs the portal, either as the
+> published Docker image (default) or natively with the systemd units below.
+> Step 1, the API token, is still yours to do.
+>
+> ```bash
+> bash deploy/create-lxc.sh --ip 10.98.3.131/24 --gw 10.98.3.1 --mtu 1420 \
+>   --ssh-key /root/.ssh/terraform_pve --pve-token 'terraform@pve!provider=…' \
+>   --tag v1.2.3
+> ```
+>
+> Docker installs upgrade with `docker compose pull && docker compose up -d` in
+> `/opt/proxmox-portal` after changing `PORTAL_TAG` in its `.env`.
+
 The portal runs in its own LXC. These steps are what was actually done to build
 the reference install (CT 131, `10.98.3.131`) on the `nemertamimi` cluster.
 
@@ -50,11 +65,11 @@ Inside the container:
 ```bash
 apt-get update
 apt-get install -y curl ca-certificates gnupg unzip sqlite3 openssh-client
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
 apt-get install -y nodejs
 
 # Match the Terraform version you use elsewhere.
-curl -fsSL -o /tmp/tf.zip https://releases.hashicorp.com/terraform/1.15.8/terraform_1.15.8_linux_amd64.zip
+curl -fsSL -o /tmp/tf.zip https://releases.hashicorp.com/terraform/1.16.4/terraform_1.16.4_linux_amd64.zip
 unzip -o /tmp/tf.zip -d /usr/local/bin/
 ```
 

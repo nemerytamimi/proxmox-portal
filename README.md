@@ -82,7 +82,36 @@ creation does not take effect. Change it inside the guest.
 
 ## Installation
 
-See [deploy/install.md](deploy/install.md).
+Quickest: on any Proxmox VE node, as root,
+
+```bash
+bash deploy/create-lxc.sh --ssh-key /root/.ssh/terraform_pve   # --help for all options
+```
+
+creates a Debian LXC running the published image under Docker Compose
+(`--mode native` installs with systemd instead). The manual steps, and what the
+script automates, are in [deploy/install.md](deploy/install.md).
+
+## Container image and CI
+
+One image, `ghcr.io/nemerytamimi/proxmox-portal`, runs both roles:
+`docker run … web` (the default) or `docker run … worker`. [compose.yml](compose.yml)
+wires the two together over a shared data volume.
+
+| Workflow | Trigger | Does |
+| --- | --- | --- |
+| [build.yml](.github/workflows/build.yml) | push, PR | prisma validate, build, typecheck, Terraform fmt/validate, ShellCheck, Hadolint, actionlint → build image → smoke test → Docker Scout gate → push |
+| [release.yml](.github/workflows/release.yml) | release published | finds the already-tested image for the release commit (`latest` if it matches, else `sha-<commit>`), smoke-tests it, retags it, verifies the digests |
+
+Image tags: `<branch>` and `sha-<commit>` on every branch push, `latest` on the
+default branch, `<tag>` plus `1.2.3`/`1.2` on a semver tag push and on release.
+Pull requests build and test but never push.
+
+The Scout step runs only when the `DOCKERHUB_USERNAME` repository variable and
+`DOCKERHUB_TOKEN` secret are set. It fails on critical or high CVEs that have a
+fix available.
+
+Run the smoke test locally with `scripts/ci/smoke-test.sh <image>`.
 
 ## Development
 

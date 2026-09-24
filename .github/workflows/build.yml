@@ -1,0 +1,223 @@
+name: Build
+
+# Every push is verified, built into an image and smoke-tested. Branch and tag
+# pushes then publish that image to GHCR; pull requests stop after the test.
+#
+# Tags pushed to ghcr.io/<owner>/<repo>:
+#   branch push   <branch>  (slashes become dashes: feature/x -> feature-x)
+#                 sha-<7-char commit>
+#                 latest    (default branch only)
+#   tag push      <tag>     (e.g. v1.2.3)
+#                 1.2.3, 1.2 (when the tag is semver)
+#                 sha-<7-char commit>
+#
+# release.yml promotes an already-tested image to the release tag; it does not
+# rebuild.
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  # Superseded PR builds are noise; branch and tag builds always finish so
+  # every published tag matches a completed, tested build.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NODE_VERSION: "24"
+  TERRAFORM_VERSION: "1.16.4"
+
+jobs:
+  verify:
+    name: Verify app
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Build-time only; env.ts reads credentials lazily so none are needed.
+      DATABASE_URL: file:/tmp/ci-portal.db
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Validate Prisma schema
+        run: npx prisma validate
+
+      - name: Build
+        run: npm run build
+
+      # After the build: tsc needs the next-env.d.ts and route types it writes.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Schema applies to an empty database
+        run: npx prisma db push --skip-generate
+
+  terraform:
+    name: Verify Terraform modules
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [lxc, vm]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Format
+        run: terraform fmt -check -diff -recursive terraform/modules/${{ matrix.module }}
+
+      - name: Init
+        working-directory: terraform/modules/${{ matrix.module }}
+        run: terraform init -backend=false -input=false
+
+      - name: Validate
+        working-directory: terraform/modules/${{ matrix.module }}
+        run: terraform validate
+
+  lint:
+    name: Lint scripts and workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck
+        run: shellcheck deploy/*.sh docker/*.sh scripts/ci/*.sh
+
+      - name: Hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          # DL3008: apt versions are pinned by the Debian release in the base tag.
+          ignore: DL3008
+
+      - name: actionlint
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:latest -color
+
+  image:
+    name: Build, test and publish image
+    needs: [verify, terraform, lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PUSH: ${{ github.event_name != 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=proxmox-portal
+            org.opencontainers.image.description=Self-service LXC and VM portal for Proxmox VE, driven by Terraform
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: proxmox-portal:ci
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            TERRAFORM_VERSION=${{ env.TERRAFORM_VERSION }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test
+        run: bash scripts/ci/smoke-test.sh proxmox-portal:ci
+
+      # Docker Scout needs a Docker Hub account: set the DOCKERHUB_USERNAME
+      # variable and DOCKERHUB_TOKEN secret to enable it. Fails only on
+      # critical/high CVEs that have a fix available; unfixed upstream Debian
+      # CVEs cannot be acted on and would block every build.
+      - name: Log in to Docker Hub for Scout
+        if: vars.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Vulnerability scan (Docker Scout)
+        if: vars.DOCKERHUB_USERNAME != ''
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: local://proxmox-portal:ci
+          only-severities: critical,high
+          only-fixed: true
+          exit-code: true
+          summary: true
+
+      - name: Log in to GHCR
+        if: env.PUSH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Same inputs as the tested build, so every layer comes from the cache:
+      # what is pushed is what was just tested.
+      - name: Publish
+        if: env.PUSH == 'true'
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            TERRAFORM_VERSION=${{ env.TERRAFORM_VERSION }}
+          cache-from: type=gha
+
+      - name: Summary
+        if: env.PUSH == 'true'
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          {
+            echo "### Published image"
+            echo
+            echo "Digest: \`$DIGEST\`"
+            echo
+            echo '```'
+            echo "$TAGS"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

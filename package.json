@@ -18,6 +18,11 @@
     "typecheck": "tsc --noEmit",
     "lint": "next lint"
   },
+  "overrides": {
+    "next": {
+      "postcss": "^8.5.28"
+    }
+  },
   "dependencies": {
     "@prisma/client": "^6.3.0",
     "bcryptjs": "^2.4.3",
