@@ -10,6 +10,16 @@ name: Release
 #
 # If the build for the release commit is still running (a release created
 # together with its tag triggers both workflows at once), this waits for it.
+#
+# The release itself is then filled in:
+#   assets  create-lxc.sh and compose.yml with defaults pinned to this
+#           release, plus SHA256SUMS. So on a PVE node
+#             bash -c "$(curl -fsSL <server>/<repo>/releases/download/<tag>/create-lxc.sh)"
+#           installs exactly this release, and releases/latest/download/...
+#           always resolves to the newest one.
+#   notes   image, digest, install/upgrade commands and verification details,
+#           between <!-- release-details --> markers. Hand-written notes
+#           outside the markers are kept; a re-run replaces only the section.
 
 on:
   release:
@@ -22,7 +32,8 @@ on:
         type: string
 
 permissions:
-  contents: read
+  # write: upload assets and edit the release notes.
+  contents: write
   packages: write
 
 concurrency:
@@ -146,19 +157,88 @@ jobs:
           done <<< "$TAGS"
           exit "$status"
 
-      - name: Summary
+      - name: Read tool versions from the image
+        id: versions
         env:
-          SOURCE_TAG: ${{ steps.src.outputs.tag }}
+          REF: ${{ steps.src.outputs.ref }}
+        run: |
+          echo "terraform=$(docker run --rm "$REF" terraform version -json | jq -r .terraform_version)" >> "$GITHUB_OUTPUT"
+          echo "node=$(docker run --rm "$REF" node --version)" >> "$GITHUB_OUTPUT"
+
+      - name: Build release assets
+        env:
+          IMAGE: ${{ steps.rel.outputs.image }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+        run: bash scripts/ci/release-assets.sh dist
+
+      - name: Generate release notes section
+        env:
+          IMAGE: ${{ steps.rel.outputs.image }}
           DIGEST: ${{ steps.src.outputs.digest }}
           SHA: ${{ steps.rel.outputs.sha }}
+          SOURCE_TAG: ${{ steps.src.outputs.tag }}
           TAGS: ${{ steps.meta.outputs.tags }}
+          REPO: ${{ github.repository }}
+          SERVER_URL: ${{ github.server_url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TF_VERSION: ${{ steps.versions.outputs.terraform }}
+          NODE_VERSION: ${{ steps.versions.outputs.node }}
+        run: bash scripts/ci/release-notes.sh > dist/release-details.md
+
+      - name: Check the release exists
+        id: gh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            # workflow_dispatch on a bare tag: the image is promoted, but there
+            # is no release to attach assets or notes to.
+            echo "::notice::No GitHub release for $RELEASE_TAG; skipping assets and notes."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload release assets
+        if: steps.gh.outputs.exists == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            dist/create-lxc.sh dist/compose.yml dist/SHA256SUMS
+
+      - name: Add details to release notes
+        if: steps.gh.outputs.exists == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body > dist/body-current.md
+          # Drop a previous generated section, keep everything else.
+          awk '
+            /<!-- release-details:start -->/ { skip = 1; next }
+            /<!-- release-details:end -->/   { skip = 0; next }
+            !skip
+          ' dist/body-current.md | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > dist/body-kept.md
           {
-            echo "### Release $RELEASE_TAG"
-            echo
-            echo "Promoted \`$SOURCE_TAG\` (commit \`$SHA\`, digest \`$DIGEST\`) to:"
-            echo
-            echo '```'
-            echo "$TAGS"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+            if [ -s dist/body-kept.md ]; then
+              cat dist/body-kept.md
+              printf '\n\n'
+            fi
+            cat dist/release-details.md
+          } > dist/body-new.md
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --notes-file dist/body-new.md
+
+      - name: Verify release assets are downloadable
+        if: steps.gh.outputs.exists == 'true' && !github.event.repository.private
+        run: |
+          base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG"
+          mkdir -p dist/check && cd dist/check
+          for f in create-lxc.sh compose.yml SHA256SUMS; do
+            curl -fsSLO --retry 5 --retry-delay 3 --retry-all-errors "$base/$f"
+          done
+          sha256sum -c SHA256SUMS
+          bash -n create-lxc.sh
+          grep -qxF "TAG=\"\${TAG:-$RELEASE_TAG}\"" create-lxc.sh
+
+      - name: Summary
+        run: cat dist/release-details.md >> "$GITHUB_STEP_SUMMARY"

@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 #
-# Create a Proxmox LXC running the portal, in one command, on a PVE node.
+# Create a Proxmox LXC running the portal, in one command, on a PVE node. No
+# clone needed: every GitHub release attaches a copy of this script whose
+# defaults point at that release's image.
 #
-#   bash create-lxc.sh                               # DHCP on vmbr0, Docker, :latest
-#   bash create-lxc.sh --ip 10.98.3.131/24 --gw 10.98.3.1 --mtu 1420 \
-#                      --tag v1.2.3 --ssh-key /root/.ssh/terraform_pve
-#   bash create-lxc.sh --mode native --ref main      # systemd units, no Docker
+#   # newest release, DHCP on vmbr0, Docker
+#   bash -c "$(curl -fsSL https://github.com/nemerytamimi/proxmox-portal/releases/latest/download/create-lxc.sh)"
 #
-# Or straight from GitHub:
+#   # a specific release, static address, options after `--`
+#   bash -c "$(curl -fsSL https://github.com/nemerytamimi/proxmox-portal/releases/download/v1.2.3/create-lxc.sh)" -- \
+#     --ip 10.98.3.131/24 --gw 10.98.3.1 --mtu 1420 --ssh-key /root/.ssh/terraform_pve
 #
-#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/nemerytamimi/proxmox-portal/main/deploy/create-lxc.sh)" -- --help
+#   # from a checkout: tracks :latest / main unless told otherwise
+#   bash deploy/create-lxc.sh --mode native --ref main
 #
 # What it does:
 #   1. downloads the newest Debian template if it is not already on the host
@@ -47,12 +50,12 @@ CT_SSH_PUBKEY="${CT_SSH_PUBKEY:-}"
 ONBOOT="${ONBOOT:-1}"
 
 MODE="${MODE:-docker}"
-IMAGE="${IMAGE:-ghcr.io/nemerytamimi/proxmox-portal}"
-TAG="${TAG:-latest}"
+IMAGE="${IMAGE:-ghcr.io/nemerytamimi/proxmox-portal}"  # release-default
+TAG="${TAG:-latest}"  # release-default
 REGISTRY_USER="${REGISTRY_USER:-}"
 REGISTRY_TOKEN="${REGISTRY_TOKEN:-}"
-REPO="${REPO:-https://github.com/nemerytamimi/proxmox-portal.git}"
-REF="${REF:-main}"
+REPO="${REPO:-https://github.com/nemerytamimi/proxmox-portal.git}"  # release-default
+REF="${REF:-main}"  # release-default
 TERRAFORM_VERSION="${TERRAFORM_VERSION:-1.16.4}"
 
 SSH_KEY="${SSH_KEY:-}"
@@ -69,7 +72,7 @@ APP_DIR=/opt/proxmox-portal
 
 usage() {
   cat <<EOF
-Usage: $0 [options]
+Usage: create-lxc.sh [options]
 
 Container
   --ctid N               Container ID (default: next free ID)

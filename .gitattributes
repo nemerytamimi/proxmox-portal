@@ -1,0 +1,5 @@
+# Scripts run inside Linux containers and are downloaded straight from
+# releases; a CRLF checkout on Windows would break every one of them.
+*.sh      text eol=lf
+Dockerfile text eol=lf
+*.yml     text eol=lf

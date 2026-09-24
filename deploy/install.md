@@ -7,10 +7,14 @@
 > Step 1, the API token, is still yours to do.
 >
 > ```bash
-> bash deploy/create-lxc.sh --ip 10.98.3.131/24 --gw 10.98.3.1 --mtu 1420 \
->   --ssh-key /root/.ssh/terraform_pve --pve-token 'terraform@pve!provider=…' \
->   --tag v1.2.3
+> bash -c "$(curl -fsSL https://github.com/nemerytamimi/proxmox-portal/releases/latest/download/create-lxc.sh)" -- \
+>   --ip 10.98.3.131/24 --gw 10.98.3.1 --mtu 1420 \
+>   --ssh-key /root/.ssh/terraform_pve --pve-token 'terraform@pve!provider=…'
 > ```
+>
+> `releases/latest/download/` installs the newest release; swap in
+> `releases/download/<tag>/` for a specific one. Each release's notes show the
+> exact command for it.
 >
 > Docker installs upgrade with `docker compose pull && docker compose up -d` in
 > `/opt/proxmox-portal` after changing `PORTAL_TAG` in its `.env`.
