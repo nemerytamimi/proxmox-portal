@@ -1,23 +1,24 @@
 # Installing the portal
 
-> **Shortcut:** [`create-lxc.sh`](create-lxc.sh) runs steps 2–6 for you on a PVE
-> node: it creates the container, applies the MTU fix, copies in the SSH key,
-> writes `portal.env` with fresh secrets, and installs the portal, either as the
-> published Docker image (default) or natively with the systemd units below.
-> Step 1, the API token, is still yours to do.
+> **Shortcut:** the LXC script in [`lxc/`](lxc/) runs steps 2–6 for you on a
+> PVE node, in the style of the community-scripts helper scripts. It creates the
+> container (Default/Advanced menus: ID, storage, bridge, static IP, MTU, …),
+> applies the in-guest MTU fix, writes `portal.env` with fresh secrets, installs
+> the portal (the published Docker image by default, or natively with the
+> systemd units below), and then copies in the API token and SSH key. Step 1,
+> creating the token, is still yours to do.
 >
 > ```bash
-> bash -c "$(curl -fsSL https://github.com/nemerytamimi/proxmox-portal/releases/latest/download/create-lxc.sh)" -- \
->   --ip 10.98.3.131/24 --gw 10.98.3.1 --mtu 1420 \
->   --ssh-key /root/.ssh/terraform_pve --pve-token 'terraform@pve!provider=…'
+> bash -c "$(curl -fsSL https://github.com/nemerytamimi/proxmox-portal/releases/latest/download/proxmox-portal.sh)"
+>
+> # unattended
+> PORTAL_PVE_TOKEN='terraform@pve!provider=…' PORTAL_SSH_KEY=/root/.ssh/terraform_pve \
+>   bash -c "$(curl -fsSL https://github.com/nemerytamimi/proxmox-portal/releases/latest/download/proxmox-portal.sh)"
 > ```
 >
 > `releases/latest/download/` installs the newest release; swap in
 > `releases/download/<tag>/` for a specific one. Each release's notes show the
-> exact command for it.
->
-> Docker installs upgrade with `docker compose pull && docker compose up -d` in
-> `/opt/proxmox-portal` after changing `PORTAL_TAG` in its `.env`.
+> exact command for it. To upgrade, run `update` inside the container.
 
 The portal runs in its own LXC. These steps are what was actually done to build
 the reference install (CT 131, `10.98.3.131`) on the `nemertamimi` cluster.

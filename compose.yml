@@ -3,7 +3,7 @@
 #   cp .env.example portal.env   # fill in; see deploy/install.md
 #   docker compose up -d
 #
-# Keep in sync with the copy embedded in deploy/create-lxc.sh.
+# Keep in sync with the copy written by deploy/lxc/install/proxmox-portal-install.sh.
 
 x-portal: &portal
   image: ${PORTAL_IMAGE:-ghcr.io/nemerytamimi/proxmox-portal}:${PORTAL_TAG:-latest}

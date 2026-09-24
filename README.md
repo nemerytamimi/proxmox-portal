@@ -85,14 +85,17 @@ creation does not take effect. Change it inside the guest.
 Quickest: on any Proxmox VE node, as root. No clone needed.
 
 ```bash
-bash -c "$(curl -fsSL https://github.com/nemerytamimi/proxmox-portal/releases/latest/download/create-lxc.sh)" -- \
-  --ssh-key /root/.ssh/terraform_pve        # -- --help for all options
+bash -c "$(curl -fsSL https://github.com/nemerytamimi/proxmox-portal/releases/latest/download/proxmox-portal.sh)"
 ```
 
-This creates a Debian LXC running the newest release's image under Docker
-Compose (`--mode native` installs with systemd instead). Each release's notes
-carry the same command pinned to that version. The manual steps, and what the
-script automates, are in [deploy/install.md](deploy/install.md).
+It works like the [community-scripts](https://community-scripts.github.io/ProxmoxVE/)
+helper scripts, whose engine it uses: the same Default/Advanced menus, then a
+Debian LXC running the newest release's image under Docker Compose
+(`PORTAL_MODE=native` installs with systemd instead). It asks for the Proxmox
+API token and the provider's SSH key at the end. Run `update` inside the
+container to upgrade. Each release's notes carry the command pinned to that
+version. The scripts are in [deploy/lxc/](deploy/lxc/); the manual steps are in
+[deploy/install.md](deploy/install.md).
 
 ## Container image and CI
 
@@ -103,7 +106,7 @@ wires the two together over a shared data volume.
 | Workflow | Trigger | Does |
 | --- | --- | --- |
 | [build.yml](.github/workflows/build.yml) | push, PR | prisma validate, build, typecheck, Terraform fmt/validate, ShellCheck, Hadolint, actionlint → build image → smoke test → Docker Scout gate → push |
-| [release.yml](.github/workflows/release.yml) | release published | finds the already-tested image for the release commit (`latest` if it matches, else `sha-<commit>`), smoke-tests it, retags it, verifies the digests; attaches `create-lxc.sh`, `compose.yml` and `SHA256SUMS` pinned to the release, and appends image, install and upgrade details to the release notes |
+| [release.yml](.github/workflows/release.yml) | release published | finds the already-tested image for the release commit (`latest` if it matches, else `sha-<commit>`), smoke-tests it, retags it, verifies the digests; attaches the LXC script `proxmox-portal.sh`, `compose.yml` and `SHA256SUMS` pinned to the release, and appends image, install and upgrade details to the release notes |
 
 Image tags: `<branch>` and `sha-<commit>` on every branch push, `latest` on the
 default branch, `<tag>` plus `1.2.3`/`1.2` on a semver tag push and on release.

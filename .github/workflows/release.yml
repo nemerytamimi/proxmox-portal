@@ -12,9 +12,9 @@ name: Release
 # together with its tag triggers both workflows at once), this waits for it.
 #
 # The release itself is then filled in:
-#   assets  create-lxc.sh and compose.yml with defaults pinned to this
+#   assets  proxmox-portal.sh (the LXC script) and compose.yml with defaults pinned to this
 #           release, plus SHA256SUMS. So on a PVE node
-#             bash -c "$(curl -fsSL <server>/<repo>/releases/download/<tag>/create-lxc.sh)"
+#             bash -c "$(curl -fsSL <server>/<repo>/releases/download/<tag>/proxmox-portal.sh)"
 #           installs exactly this release, and releases/latest/download/...
 #           always resolves to the newest one.
 #   notes   image, digest, install/upgrade commands and verification details,
@@ -168,7 +168,7 @@ jobs:
       - name: Build release assets
         env:
           IMAGE: ${{ steps.rel.outputs.image }}
-          REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+          REPO_SLUG: ${{ github.repository }}
         run: bash scripts/ci/release-assets.sh dist
 
       - name: Generate release notes section
@@ -205,7 +205,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber \
-            dist/create-lxc.sh dist/compose.yml dist/SHA256SUMS
+            dist/proxmox-portal.sh dist/compose.yml dist/SHA256SUMS
 
       - name: Add details to release notes
         if: steps.gh.outputs.exists == 'true'
@@ -233,12 +233,14 @@ jobs:
         run: |
           base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG"
           mkdir -p dist/check && cd dist/check
-          for f in create-lxc.sh compose.yml SHA256SUMS; do
+          for f in proxmox-portal.sh compose.yml SHA256SUMS; do
             curl -fsSLO --retry 5 --retry-delay 3 --retry-all-errors "$base/$f"
           done
           sha256sum -c SHA256SUMS
-          bash -n create-lxc.sh
-          grep -qxF "TAG=\"\${TAG:-$RELEASE_TAG}\"" create-lxc.sh
+          bash -n proxmox-portal.sh
+          grep -qxF "PORTAL_TAG=\"\${PORTAL_TAG:-$RELEASE_TAG}\"" proxmox-portal.sh
+          # The LXC script fetches its install/ half from the tag at run time.
+          curl -fsSI --retry 5 --retry-delay 3 "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$RELEASE_TAG/deploy/lxc/install/proxmox-portal-install.sh" >/dev/null
 
       - name: Summary
         run: cat dist/release-details.md >> "$GITHUB_STEP_SUMMARY"

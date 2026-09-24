@@ -47,33 +47,35 @@ docker pull $IMAGE@$DIGEST
 
 ## Install on Proxmox VE
 
-Run on any Proxmox VE node, as root. No clone needed: the script attached to
-this release installs \`$RELEASE_TAG\` by default.
+Run on any Proxmox VE node, as root. No clone needed. It uses the same menus as
+the [community-scripts](https://community-scripts.github.io/ProxmoxVE/) helper
+scripts (choose *Default* or *Advanced* settings) and installs \`$RELEASE_TAG\`.
+It asks for the Proxmox API token and the provider's SSH key at the end.
 
 \`\`\`bash
-bash -c "\$(curl -fsSL $DL/create-lxc.sh)"
+bash -c "\$(curl -fsSL $DL/proxmox-portal.sh)"
 \`\`\`
 
-With a static address, the MTU fix and the provider's SSH key (every option:
-\`-- --help\`):
+Portal settings can be passed as environment variables, e.g. unattended:
 
 \`\`\`bash
-bash -c "\$(curl -fsSL $DL/create-lxc.sh)" -- \\
-  --ip 10.0.0.50/24 --gw 10.0.0.1 --mtu 1420 \\
-  --ssh-key /root/.ssh/terraform_pve \\
-  --pve-token 'terraform@pve!provider=<uuid>'
+PORTAL_PVE_TOKEN='terraform@pve!provider=<uuid>' PORTAL_SSH_KEY=/root/.ssh/terraform_pve \\
+  bash -c "\$(curl -fsSL $DL/proxmox-portal.sh)"
 \`\`\`
 
-Add \`--mode native\` to install from source with systemd instead of Docker; it
+\`PORTAL_MODE=native\` installs from source with systemd instead of Docker; it
 checks out \`$RELEASE_TAG\`.
 
 ## Upgrade an existing install
 
-Docker install created by \`create-lxc.sh\` (replace \`<CTID>\`):
+Inside the container (\`pct enter <CTID>\`), run:
 
 \`\`\`bash
-pct exec <CTID> -- bash -c 'cd /opt/proxmox-portal && sed -i "s/^PORTAL_TAG=.*/PORTAL_TAG=$RELEASE_TAG/" .env && docker compose pull && docker compose up -d'
+update
 \`\`\`
+
+A container pinned to a release moves to the newest release; one on a moving
+tag (\`latest\`, a branch) re-pulls it.
 
 Docker Compose anywhere else:
 
@@ -81,8 +83,6 @@ Docker Compose anywhere else:
 curl -fsSLO $DL/compose.yml   # defaults to $RELEASE_TAG
 docker compose pull && docker compose up -d
 \`\`\`
-
-Native install: see [Upgrading]($SERVER_URL/$REPO/blob/$RELEASE_TAG/deploy/install.md#upgrading), using \`git checkout $RELEASE_TAG\`.
 
 ## Verification
 
